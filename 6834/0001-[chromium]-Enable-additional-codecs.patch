@@ -1,0 +1,513 @@
+diff --git a/media/base/media_types.cc b/media/base/media_types.cc
+index 7a7f52a3224..d32d7eba884 100644
+--- a/media/base/media_types.cc
++++ b/media/base/media_types.cc
+@@ -40,6 +40,7 @@ VideoType VideoType::FromDecoderConfig(const VideoDecoderConfig& config) {
+     case VideoCodec::kH264:
+     case VideoCodec::kVP9:
+     case VideoCodec::kHEVC:
++    case VideoCodec::kVVC:
+       // 10 is the level_idc for level 1.0.
+       level = 10;
+       break;
+diff --git a/media/base/mime_util_internal.cc b/media/base/mime_util_internal.cc
+index 30ef5e1ac00..d3e978c17ef 100644
+--- a/media/base/mime_util_internal.cc
++++ b/media/base/mime_util_internal.cc
+@@ -212,6 +212,8 @@ VideoCodec MimeUtilToVideoCodec(MimeUtil::Codec codec) {
+       return VideoCodec::kH264;
+     case MimeUtil::HEVC:
+       return VideoCodec::kHEVC;
++    case MimeUtil::VVC:
++      return VideoCodec::kVVC;
+     case MimeUtil::VP8:
+       return VideoCodec::kVP8;
+     case MimeUtil::VP9:
+@@ -353,6 +355,7 @@ void MimeUtil::AddSupportedMediaFormats() {
+ #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+   mp4_video_codecs.emplace(HEVC);
+ #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++  mp4_video_codecs.emplace(VVC);
+ 
+ #if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+   mp4_video_codecs.emplace(DOLBY_VISION);
+@@ -635,6 +638,8 @@ bool MimeUtil::IsCodecSupportedOnAndroid(Codec codec,
+ #else
+       return false;
+ #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++    case VVC:
++      return true;
+ 
+     case VP8:
+       // If clear, the unified pipeline can always decode VP8 in software.
+@@ -883,6 +888,15 @@ bool MimeUtil::ParseCodecHelper(std::string_view mime_type_lower_case,
+     return true;
+   }
+ 
++  if (auto result = ParseVVCCodecId(codec_id)) {
++    out_result->codec = MimeUtil::VVC;
++    out_result->video = result;
++
++    DCHECK(!out_result->video->color_space.IsSpecified());
++    out_result->video->color_space = kDefaultColorSpace;
++    return true;
++  }
++
+   if (auto result = ParseDolbyVisionCodecId(codec_id)) {
+     out_result->codec = MimeUtil::DOLBY_VISION;
+     out_result->video = result;
+diff --git a/media/base/mime_util_internal.h b/media/base/mime_util_internal.h
+index 6ba94627aa1..0629421f468 100644
+--- a/media/base/mime_util_internal.h
++++ b/media/base/mime_util_internal.h
+@@ -44,6 +44,7 @@ class MEDIA_EXPORT MimeUtil {
+     FLAC,
+     H264,
+     HEVC,
++    VVC,
+     VP8,
+     VP9,
+     THEORA,
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index 34e1ecb868e..11002f693a9 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -186,6 +186,7 @@ bool IsVideoCodecProprietary(VideoCodec codec) {
+     case VideoCodec::kMPEG2:
+     case VideoCodec::kMPEG4:
+     case VideoCodec::kHEVC:
++    case VideoCodec::kVVC:
+     case VideoCodec::kDolbyVision:
+       return true;
+     case VideoCodec::kUnknown:
+@@ -235,6 +236,7 @@ bool IsDecoderHevcProfileSupported(const VideoType& type) {
+   }
+ 
+ #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
++#if 0
+ #if BUILDFLAG(PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT)
+ #if BUILDFLAG(IS_CHROMEOS_LACROS)
+   // TODO(b/171813538): For Lacros, the supplemental profile cache will be
+@@ -256,6 +258,8 @@ bool IsDecoderHevcProfileSupported(const VideoType& type) {
+ #else
+   return true;
+ #endif  // BUIDFLAG(PLATFORM_HAS_OPTIONAL_HEVC_DECODE_SUPPORT)
++#endif
++  return true;
+ #else
+   return false;
+ #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
+@@ -498,6 +502,8 @@ bool IsDefaultDecoderSupportedVideoType(const VideoType& type) {
+       return IsDecoderVp9ProfileSupported(type);
+     case VideoCodec::kHEVC:
+       return IsDecoderHevcProfileSupported(type);
++    case VideoCodec::kVVC:
++      return true;
+     case VideoCodec::kDolbyVision:
+       return IsDecoderDolbyVisionProfileSupported(type);
+     case VideoCodec::kUnknown:
+@@ -568,6 +574,7 @@ bool IsDefaultEncoderSupportedVideoType(const VideoType& type) {
+       return IsEncoderVp9ProfileSupported(type);
+     case VideoCodec::kHEVC:
+       return IsEncoderHevcProfileSupported(type);
++    case VideoCodec::kVVC:
+     case VideoCodec::kTheora:
+     case VideoCodec::kDolbyVision:
+     case VideoCodec::kUnknown:
+@@ -580,8 +587,8 @@ bool IsDefaultEncoderSupportedVideoType(const VideoType& type) {
+ 
+ bool IsDecoderBuiltInVideoCodec(VideoCodec codec) {
+ #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) && BUILDFLAG(USE_PROPRIETARY_CODECS)
+-  if (codec == VideoCodec::kH264 &&
+-      base::FeatureList::IsEnabled(kBuiltInH264Decoder)) {
++  if (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC ||
++      codec == VideoCodec::kVVC) {
+     return true;
+   }
+ #endif  // BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS) &&
+diff --git a/media/base/video_codecs.cc b/media/base/video_codecs.cc
+index 879754624a4..1dc4d72645e 100644
+--- a/media/base/video_codecs.cc
++++ b/media/base/video_codecs.cc
+@@ -37,6 +37,8 @@ std::string GetCodecName(VideoCodec codec) {
+       return "vp9";
+     case VideoCodec::kAV1:
+       return "av1";
++    case VideoCodec::kVVC:
++      return "vvc";
+   }
+   NOTREACHED();
+ }
+@@ -66,6 +68,8 @@ std::string GetCodecNameForUMA(VideoCodec codec) {
+       return "VP9";
+     case VideoCodec::kAV1:
+       return "AV1";
++    case VideoCodec::kVVC:
++      return "VVC";
+   }
+   NOTREACHED();
+ }
+diff --git a/media/base/video_codecs.h b/media/base/video_codecs.h
+index 8ca35120eee..c8195e4209d 100644
+--- a/media/base/video_codecs.h
++++ b/media/base/video_codecs.h
+@@ -29,12 +29,13 @@ enum class VideoCodec {
+   kHEVC,
+   kDolbyVision,
+   kAV1,
++  kVVC,
+   // DO NOT ADD RANDOM VIDEO CODECS!
+   //
+   // The only acceptable time to add a new codec is if there is production code
+   // that uses said codec in the same CL.
+ 
+-  kMaxValue = kAV1,  // Must equal the last "real" codec above.
++  kMaxValue = kVVC,  // Must equal the last "real" codec above.
+ };
+ 
+ // Video codec profiles. Keep in sync with mojo::VideoCodecProfile (see
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index c050da6cd3d..4e4b4d3c802 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -136,6 +136,12 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
+       return AV_CODEC_ID_AAC;
+     case AudioCodec::kALAC:
+       return AV_CODEC_ID_ALAC;
++#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
++    case AudioCodec::kAC3:
++      return AV_CODEC_ID_AC3;
++    case AudioCodec::kEAC3:
++      return AV_CODEC_ID_EAC3;
++#endif
+     case AudioCodec::kMP3:
+       return AV_CODEC_ID_MP3;
+     case AudioCodec::kPCM:
+@@ -187,6 +193,8 @@ static VideoCodec CodecIDToVideoCodec(AVCodecID codec_id) {
+     case AV_CODEC_ID_HEVC:
+       return VideoCodec::kHEVC;
+ #endif
++    case AV_CODEC_ID_VVC:
++      return VideoCodec::kVVC;
+     case AV_CODEC_ID_THEORA:
+       return VideoCodec::kTheora;
+     case AV_CODEC_ID_MPEG4:
+@@ -211,6 +219,8 @@ AVCodecID VideoCodecToCodecID(VideoCodec video_codec) {
+     case VideoCodec::kHEVC:
+       return AV_CODEC_ID_HEVC;
+ #endif
++    case VideoCodec::kVVC:
++      return AV_CODEC_ID_VVC;
+     case VideoCodec::kTheora:
+       return AV_CODEC_ID_THEORA;
+     case VideoCodec::kMPEG4:
+@@ -553,6 +563,7 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
+     }
+ #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
+     case VideoCodec::kHEVC: {
++#if 0
+       int hevc_profile = -1;
+       // We need to parse extradata each time, because we won't add ffmpeg
+       // hevc decoder & parser to chromium and codec_context->profile
+@@ -618,8 +629,37 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
+           break;
+       }
+       break;
++#endif
++      switch (codec_context->profile) {
++        case FF_PROFILE_HEVC_MAIN:
++          profile = HEVCPROFILE_MAIN;
++          break;
++        case FF_PROFILE_HEVC_MAIN_10:
++          profile = HEVCPROFILE_MAIN10;
++          break;
++        case FF_PROFILE_HEVC_MAIN_STILL_PICTURE:
++          profile = HEVCPROFILE_MAIN_STILL_PICTURE;
++          break;
++        case FF_PROFILE_HEVC_REXT:
++          profile = HEVCPROFILE_REXT;
++          break;
++        case FF_PROFILE_HEVC_SCC:
++          profile = HEVCPROFILE_SCREEN_EXTENDED;
++          break;
++      }
++      break;
+     }
+ #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
++    case VideoCodec::kVVC:
++      switch (codec_context->profile) {
++        case FF_PROFILE_VVC_MAIN_10:
++          profile = VVCPROFILE_MAIN10;
++          break;
++        case FF_PROFILE_VVC_MAIN_10_444:
++          profile = VVCPROFILE_MAIN10_444;
++          break;
++      }
++      break;
+ #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+     case VideoCodec::kVP8:
+       profile = VP8PROFILE_ANY;
+@@ -829,7 +869,50 @@ void VideoDecoderConfigToAVCodecContext(
+     AVCodecContext* codec_context) {
+   codec_context->codec_type = AVMEDIA_TYPE_VIDEO;
+   codec_context->codec_id = VideoCodecToCodecID(config.codec());
+-  codec_context->profile = VideoCodecProfileToProfileID(config.profile());
++  int profile;
++  switch (config.codec()) {
++    case VideoCodec::kH264:
++      profile = VideoCodecProfileToProfileID(config.profile());
++      break;
++    case VideoCodec::kHEVC:
++      switch (config.profile()) {
++        case HEVCPROFILE_MAIN:
++          profile = FF_PROFILE_HEVC_MAIN;
++          break;
++        case HEVCPROFILE_MAIN10:
++          profile = FF_PROFILE_HEVC_MAIN_10;
++          break;
++        case HEVCPROFILE_MAIN_STILL_PICTURE:
++          profile = FF_PROFILE_HEVC_MAIN_STILL_PICTURE;
++          break;
++        case HEVCPROFILE_REXT:
++          profile = FF_PROFILE_HEVC_REXT;
++          break;
++        case HEVCPROFILE_SCREEN_EXTENDED:
++          profile = FF_PROFILE_HEVC_SCC;
++          break;
++        default:
++          profile = FF_PROFILE_UNKNOWN;
++          break;
++      }
++      break;
++    case VideoCodec::kVVC:
++      switch (config.profile()) {
++        case VVCPROFILE_MAIN10:
++          profile = FF_PROFILE_VVC_MAIN_10;
++          break;
++        case VVCPROFILE_MAIN10_444:
++          profile = FF_PROFILE_VVC_MAIN_10_444;
++          break;
++        default:
++          profile = FF_PROFILE_UNKNOWN;
++          break;
++      }
++      break;
++    default:
++      NOTREACHED();
++  }
++  codec_context->profile = profile;
+   codec_context->coded_width = config.coded_size().width();
+   codec_context->coded_height = config.coded_size().height();
+   if (config.color_space_info().range == gfx::ColorSpace::RangeID::FULL)
+diff --git a/media/ffmpeg/scripts/build_ffmpeg.py b/media/ffmpeg/scripts/build_ffmpeg.py
+index 3661b91740a..8488b291171 100755
+--- a/media/ffmpeg/scripts/build_ffmpeg.py
++++ b/media/ffmpeg/scripts/build_ffmpeg.py
+@@ -987,9 +987,9 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+ 
+     # Google Chrome specific configuration.
+     configure_flags['Chrome'].extend([
+-        '--enable-decoder=aac,h264',
++        '--enable-decoder=aac,ac3,eac3,h264,hevc,vvc',
+         '--enable-demuxer=aac',
+-        '--enable-parser=aac,h264',
++        '--enable-parser=aac,ac3,h264,hevc,vvc',
+     ])
+ 
+     configure_flags['ChromeAndroid'].extend([
+@@ -1009,7 +1009,7 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
+ 
+     # Don't build video decoders for 32-bit Android ARM due to binary size
+     # concerns.
+-    if target_os != 'android' or not target_arch in ("arm", "arm-neon"):
++    if True or target_os != 'android' or not target_arch in ("arm", "arm-neon"):
+         do_build_ffmpeg(
+             'Chromium', configure_flags['Common'] +
+             configure_flags['Chromium'] + configure_args)
+diff --git a/media/ffmpeg/scripts/generate_gn.py b/media/ffmpeg/scripts/generate_gn.py
+index 12455913ea7..c00b05526ef 100755
+--- a/media/ffmpeg/scripts/generate_gn.py
++++ b/media/ffmpeg/scripts/generate_gn.py
+@@ -690,8 +690,10 @@ MUST_BE_MISSING_INCLUDE_FILES = [
+ # DO NOT ADD TO THIS LIST without first confirming with lawyers that the
+ # licenses are okay to add.
+ ALLOWED_LICENSES = [
++    'BSD (2 clause) LGPL (v2.1 or later)',
+     'BSD (3 clause) LGPL (v2.1 or later)',
+     'BSL (v1) LGPL (v2.1 or later)',
++    'GPL (v2 or later)',
+     'ISC GENERATED FILE',
+     'LGPL (v2.1 or later)',
+     'LGPL (v2.1 or later) GENERATED FILE',
+diff --git a/media/ffmpeg/scripts/robo_lib/config.py b/media/ffmpeg/scripts/robo_lib/config.py
+index 84a6bf5196d..d476325341b 100644
+--- a/media/ffmpeg/scripts/robo_lib/config.py
++++ b/media/ffmpeg/scripts/robo_lib/config.py
+@@ -200,7 +200,7 @@ class RoboConfiguration:
+             raise ValueError(
+                 f"Unrecognized CPU architecture: {platform.machine()}")
+ 
+-        if platform.system() == "Linux":
++        if False and platform.system() == "Linux":
+             self._host_operating_system = "linux"
+ 
+             try:
+@@ -218,6 +218,9 @@ class RoboConfiguration:
+                 raise Exception(
+                     "Couldn't read OS flavor from /etc/lsb-release file "
+                     "(needed to install packages)")
++        elif platform.system() == "Linux":
++            self._host_operating_system = "linux"
++            self._os_flavor = packages.OsFlavor.Debian
+         elif platform.system() == "Darwin":
+             self._host_operating_system = "mac"
+         elif platform.system() == "Windows" or "CYGWIN_NT" in platform.system(
+diff --git a/media/filters/ffmpeg_glue.cc b/media/filters/ffmpeg_glue.cc
+index 939964aa9aa..107467f2d11 100644
+--- a/media/filters/ffmpeg_glue.cc
++++ b/media/filters/ffmpeg_glue.cc
+@@ -19,12 +19,14 @@ namespace media {
+ 
+ // Kill switches in case things explode. Remove after M132.
+ // TODO(crbug.com/355485812): Re-enable this flag.
++#if 0
+ BASE_FEATURE(kAllowOnlyAudioCodecsDuringDemuxing,
+              "AllowOnlyAudioCodecsDuringDemuxing",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kForbidH264ParsingDuringDemuxing,
+              "ForbidH264ParsingDuringDemuxing",
+              base::FEATURE_ENABLED_BY_DEFAULT);
++#endif
+ 
+ // Internal buffer size used by AVIO for reading.
+ // TODO(dalecurtis): Experiment with this buffer size and measure impact on
+@@ -120,9 +125,11 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
+ 
+   // We don't allow H.264 parsing during demuxing since we have our own parser
+   // and the ffmpeg one increases memory usage unnecessarily.
++#if 0
+   if (base::FeatureList::IsEnabled(kForbidH264ParsingDuringDemuxing)) {
+     format_context_->flags |= AVFMT_FLAG_NOH264PARSE;
+   }
++#endif
+ 
+   // Ensures format parsing errors will bail out. From an audit on 11/2017, all
+   // instances were real failures. Solves bugs like http://crbug.com/710791.
+@@ -138,12 +145,14 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
+     // deprecations and when an external ffmpeg is used this adds extra
+     // security.
+     static const base::NoDestructor<std::string> kCombinedCodecList([]() {
++#if 0
+       if (base::FeatureList::IsEnabled(kAllowOnlyAudioCodecsDuringDemuxing)) {
+         // We also don't allow ffmpeg to use any video decoders during demuxing
+         // since it's unnecessary for the codecs we use and just increases
+         // memory usage.
+         return std::string(GetAllowedAudioDecoders());
+       }
++#endif
+ 
+       return base::JoinString(
+           {GetAllowedAudioDecoders(), GetAllowedVideoDecoders()}, ",");
+@@ -163,7 +172,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
+         "vorbis,libopus,flac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,"
+         "mp3,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw");
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS)
+-    allowed_decoders += ",aac";
++    allowed_decoders += ",aac,ac3,eac3";
+ #endif
+     return allowed_decoders;
+   }());
+@@ -174,7 +183,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
+ const char* FFmpegGlue::GetAllowedVideoDecoders() {
+   // This should match the configured lists in //third_party/ffmpeg.
+ #if BUILDFLAG(USE_PROPRIETARY_CODECS) && BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+-  return IsDecoderBuiltInVideoCodec(VideoCodec::kH264) ? "h264" : "";
++  return "h264,hevc,vvc";
+ #else
+   return "";
+ #endif
+diff --git a/media/filters/ffmpeg_video_decoder.cc b/media/filters/ffmpeg_video_decoder.cc
+index 847b17423a1..d2be77f75e0 100644
+--- a/media/filters/ffmpeg_video_decoder.cc
++++ b/media/filters/ffmpeg_video_decoder.cc
+@@ -82,7 +82,6 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+     case VideoCodec::kUnknown:
+     case VideoCodec::kVC1:
+     case VideoCodec::kMPEG2:
+-    case VideoCodec::kHEVC:
+     case VideoCodec::kVP9:
+     case VideoCodec::kAV1:
+     case VideoCodec::kDolbyVision:
+@@ -93,16 +92,18 @@ static int GetFFmpegVideoDecoderThreadCount(const VideoDecoderConfig& config) {
+       NOTREACHED();
+ 
+     case VideoCodec::kH264:
+-      // Normalize to three threads for 1080p content, then scale linearly
+-      // with number of pixels.
+-      // Examples:
+-      // 4k: 12 threads
+-      // 1440p: 5 threads
+-      // 1080p: 3 threads
+-      // anything lower than 1080p: 2 threads
+-      desired_threads = config.coded_size().width() *
+-                        config.coded_size().height() * 3 / 1920 / 1080;
++      desired_threads = 4;
++      break;
++    case VideoCodec::kHEVC:
++      desired_threads = 6;
++      break;
++    case VideoCodec::kVVC:
++      desired_threads = 8;
++      break;
+   }
++  // Scale linearly with number of pixels.
++  desired_threads = config.coded_size().width() *
++                    config.coded_size().height() * desired_threads / 1920 / 1080;
+ 
+   return VideoDecoder::GetRecommendedThreadCount(desired_threads);
+ }
+@@ -127,7 +128,8 @@ static void ReleaseVideoBufferImpl(void* opaque, uint8_t* data) {
+ // static
+ bool FFmpegVideoDecoder::IsCodecSupported(VideoCodec codec) {
+   // We only build support for H.264.
+-  return codec == VideoCodec::kH264 && IsDecoderBuiltInVideoCodec(codec);
++  return (codec == VideoCodec::kH264 || codec == VideoCodec::kHEVC ||
++          codec == VideoCodec::kVVC) && IsDecoderBuiltInVideoCodec(codec);
+ }
+ 
+ FFmpegVideoDecoder::FFmpegVideoDecoder(MediaLog* media_log)
+diff --git a/media/mojo/mojom/stable/stable_video_decoder_types.mojom b/media/mojo/mojom/stable/stable_video_decoder_types.mojom
+index 9038aa503c3..a4eb1c98d85 100644
+--- a/media/mojo/mojom/stable/stable_video_decoder_types.mojom
++++ b/media/mojo/mojom/stable/stable_video_decoder_types.mojom
+@@ -25,6 +25,7 @@ enum VideoCodec {
+   kHEVC,
+   kDolbyVision,
+   kAV1,
++  kVVC,
+   // DO NOT ADD RANDOM VIDEO CODECS!
+   //
+   // The only acceptable time to add a new codec is if there is production code
+diff --git a/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h b/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
+index 08367fd7d53..6ed8704e224 100644
+--- a/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
++++ b/media/mojo/mojom/stable/stable_video_decoder_types_mojom_traits.h
+@@ -806,6 +806,8 @@ struct EnumTraits<media::stable::mojom::VideoCodec, ::media::VideoCodec> {
+         return media::stable::mojom::VideoCodec::kDolbyVision;
+       case ::media::VideoCodec::kAV1:
+         return media::stable::mojom::VideoCodec::kAV1;
++      case ::media::VideoCodec::kVVC:
++        return media::stable::mojom::VideoCodec::kVVC;
+     }
+ 
+     NOTREACHED();
+@@ -849,6 +851,9 @@ struct EnumTraits<media::stable::mojom::VideoCodec, ::media::VideoCodec> {
+       case media::stable::mojom::VideoCodec::kAV1:
+         *output = ::media::VideoCodec::kAV1;
+         return true;
++      case media::stable::mojom::VideoCodec::kVVC:
++        *output = ::media::VideoCodec::kVVC;
++        return true;
+     }
+ 
+     NOTREACHED();
