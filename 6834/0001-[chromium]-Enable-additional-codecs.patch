@@ -167,10 +167,21 @@ index 8ca35120eee..c8195e4209d 100644
  
  // Video codec profiles. Keep in sync with mojo::VideoCodecProfile (see
 diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
-index c050da6cd3d..4e4b4d3c802 100644
+index c050da6cd3d..92abebd9bcf 100644
 --- a/media/ffmpeg/ffmpeg_common.cc
 +++ b/media/ffmpeg/ffmpeg_common.cc
-@@ -136,6 +136,12 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
+@@ -94,6 +94,10 @@ AudioCodec CodecIDToAudioCodec(AVCodecID codec_id) {
+       return AudioCodec::kAC3;
+     case AV_CODEC_ID_EAC3:
+       return AudioCodec::kEAC3;
++#endif
++#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
++    case AV_CODEC_ID_DTS:
++      return AudioCodec::kDTS;
+ #endif
+     case AV_CODEC_ID_MP3:
+       return AudioCodec::kMP3;
+@@ -136,6 +140,16 @@ AVCodecID AudioCodecToCodecID(AudioCodec audio_codec,
        return AV_CODEC_ID_AAC;
      case AudioCodec::kALAC:
        return AV_CODEC_ID_ALAC;
@@ -180,10 +191,14 @@ index c050da6cd3d..4e4b4d3c802 100644
 +    case AudioCodec::kEAC3:
 +      return AV_CODEC_ID_EAC3;
 +#endif
++#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
++    case AudioCodec::kDTS:
++      return AV_CODEC_ID_DTS;
++#endif
      case AudioCodec::kMP3:
        return AV_CODEC_ID_MP3;
      case AudioCodec::kPCM:
-@@ -187,6 +193,8 @@ static VideoCodec CodecIDToVideoCodec(AVCodecID codec_id) {
+@@ -187,6 +201,8 @@ static VideoCodec CodecIDToVideoCodec(AVCodecID codec_id) {
      case AV_CODEC_ID_HEVC:
        return VideoCodec::kHEVC;
  #endif
@@ -192,7 +207,7 @@ index c050da6cd3d..4e4b4d3c802 100644
      case AV_CODEC_ID_THEORA:
        return VideoCodec::kTheora;
      case AV_CODEC_ID_MPEG4:
-@@ -211,6 +219,8 @@ AVCodecID VideoCodecToCodecID(VideoCodec video_codec) {
+@@ -211,6 +227,8 @@ AVCodecID VideoCodecToCodecID(VideoCodec video_codec) {
      case VideoCodec::kHEVC:
        return AV_CODEC_ID_HEVC;
  #endif
@@ -201,7 +216,7 @@ index c050da6cd3d..4e4b4d3c802 100644
      case VideoCodec::kTheora:
        return AV_CODEC_ID_THEORA;
      case VideoCodec::kMPEG4:
-@@ -553,6 +563,7 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
+@@ -553,6 +571,7 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
      }
  #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
      case VideoCodec::kHEVC: {
@@ -209,7 +224,7 @@ index c050da6cd3d..4e4b4d3c802 100644
        int hevc_profile = -1;
        // We need to parse extradata each time, because we won't add ffmpeg
        // hevc decoder & parser to chromium and codec_context->profile
-@@ -618,8 +629,37 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
+@@ -618,8 +637,37 @@ bool AVStreamToVideoDecoderConfig(const AVStream* stream,
            break;
        }
        break;
@@ -247,7 +262,7 @@ index c050da6cd3d..4e4b4d3c802 100644
  #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
      case VideoCodec::kVP8:
        profile = VP8PROFILE_ANY;
-@@ -829,7 +869,50 @@ void VideoDecoderConfigToAVCodecContext(
+@@ -829,7 +877,50 @@ void VideoDecoderConfigToAVCodecContext(
      AVCodecContext* codec_context) {
    codec_context->codec_type = AVMEDIA_TYPE_VIDEO;
    codec_context->codec_id = VideoCodecToCodecID(config.codec());
@@ -300,7 +315,7 @@ index c050da6cd3d..4e4b4d3c802 100644
    codec_context->coded_height = config.coded_size().height();
    if (config.color_space_info().range == gfx::ColorSpace::RangeID::FULL)
 diff --git a/media/ffmpeg/scripts/build_ffmpeg.py b/media/ffmpeg/scripts/build_ffmpeg.py
-index 3661b91740a..8488b291171 100755
+index 3661b91740a..478486feb7a 100755
 --- a/media/ffmpeg/scripts/build_ffmpeg.py
 +++ b/media/ffmpeg/scripts/build_ffmpeg.py
 @@ -987,9 +987,9 @@ def ConfigureAndBuild(target_arch, target_os, host_os, host_arch,
@@ -308,10 +323,10 @@ index 3661b91740a..8488b291171 100755
      # Google Chrome specific configuration.
      configure_flags['Chrome'].extend([
 -        '--enable-decoder=aac,h264',
-+        '--enable-decoder=aac,ac3,eac3,h264,hevc,vvc',
++        '--enable-decoder=aac,ac3,eac3,dca,h264,hevc,vvc',
          '--enable-demuxer=aac',
 -        '--enable-parser=aac,h264',
-+        '--enable-parser=aac,ac3,h264,hevc,vvc',
++        '--enable-parser=aac,ac3,dca,h264,hevc,vvc',
      ])
  
      configure_flags['ChromeAndroid'].extend([
@@ -363,7 +378,7 @@ index 84a6bf5196d..d476325341b 100644
              self._host_operating_system = "mac"
          elif platform.system() == "Windows" or "CYGWIN_NT" in platform.system(
 diff --git a/media/filters/ffmpeg_glue.cc b/media/filters/ffmpeg_glue.cc
-index 939964aa9aa..107467f2d11 100644
+index 939964aa9aa..04c8995f852 100644
 --- a/media/filters/ffmpeg_glue.cc
 +++ b/media/filters/ffmpeg_glue.cc
 @@ -19,12 +19,14 @@ namespace media {
@@ -381,7 +396,7 @@ index 939964aa9aa..107467f2d11 100644
  
  // Internal buffer size used by AVIO for reading.
  // TODO(dalecurtis): Experiment with this buffer size and measure impact on
-@@ -120,9 +125,11 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
+@@ -120,9 +122,11 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
  
    // We don't allow H.264 parsing during demuxing since we have our own parser
    // and the ffmpeg one increases memory usage unnecessarily.
@@ -393,7 +408,7 @@ index 939964aa9aa..107467f2d11 100644
  
    // Ensures format parsing errors will bail out. From an audit on 11/2017, all
    // instances were real failures. Solves bugs like http://crbug.com/710791.
-@@ -138,12 +145,14 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
+@@ -138,12 +142,14 @@ FFmpegGlue::FFmpegGlue(FFmpegURLProtocol* protocol) {
      // deprecations and when an external ffmpeg is used this adds extra
      // security.
      static const base::NoDestructor<std::string> kCombinedCodecList([]() {
@@ -408,16 +423,16 @@ index 939964aa9aa..107467f2d11 100644
  
        return base::JoinString(
            {GetAllowedAudioDecoders(), GetAllowedVideoDecoders()}, ",");
-@@ -163,7 +172,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
+@@ -163,7 +169,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
          "vorbis,libopus,flac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,"
          "mp3,pcm_s16be,pcm_s24be,pcm_mulaw,pcm_alaw");
  #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 -    allowed_decoders += ",aac";
-+    allowed_decoders += ",aac,ac3,eac3";
++    allowed_decoders += ",aac,ac3,eac3,dca";
  #endif
      return allowed_decoders;
    }());
-@@ -174,7 +183,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
+@@ -174,7 +180,7 @@ const char* FFmpegGlue::GetAllowedAudioDecoders() {
  const char* FFmpegGlue::GetAllowedVideoDecoders() {
    // This should match the configured lists in //third_party/ffmpeg.
  #if BUILDFLAG(USE_PROPRIETARY_CODECS) && BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
@@ -511,3 +526,15 @@ index 08367fd7d53..6ed8704e224 100644
      }
  
      NOTREACHED();
+diff --git a/build/config/unsafe_buffers_paths.txt b/build/config/unsafe_buffers_paths.txt
+index 8d20f93f25d..34f4665cf23 100644
+--- a/build/config/unsafe_buffers_paths.txt
++++ b/build/config/unsafe_buffers_paths.txt
+@@ -110,6 +110,7 @@
+ -gpu/ipc/service/
+ -ios/
+ -ios_internal/
++-media/formats/dts/
+ -native_client/
+ -net/third_party/
+ -printing/
